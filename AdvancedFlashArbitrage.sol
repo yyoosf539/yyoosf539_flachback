@@ -22,16 +22,6 @@ interface IUniswapV2Callee {
     function pancakeCall(address sender, uint amount0, uint amount1, bytes calldata data) external;
 }
 
-/**
- * @title AdvancedFlashArbitrage
- * @notice نسخة مصلّحة:
- *  1) الـ factories صارت "موثّقة" (whitelist) من طرف الـ owner فقط بدل ما تكون
- *     باراميتر حر بالـ calldata — قبل هيك كان ممكن حدا يمرر factory وهمي
- *     يرجع getPair() = نفس الـ pair المزيّف، فيصير التحقق دائري وما بيحمي شي.
- *  2) إضافة تحقق إن borrowToken/borrowAmount فعلاً مطابقين لناتج swap على pair1،
- *     وإن repayToken هو فعلاً أحد توكني pair1 (وإلا العملية بترجع revert بدري
- *     بدل ما تعتمد فقط على فشل ضمني بمعادلة K تبع Uniswap).
- */
 contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
     using SafeERC20 for IERC20;
 
@@ -45,7 +35,6 @@ contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
     event ArbitrageExecuted(address indexed profitToken, uint256 profit);
     event TrustedFactoryUpdated(address indexed factory, bool trusted);
 
-    // العنوان الوحيد المسموح له بأن يكون "مقرض" أثناء التنفيذ الحالي
     address private _expectedPair1;
 
     // factories موثّقة فقط (يضيفها/يشيلها الـ owner) — هاد اللي بيمنع
@@ -67,8 +56,8 @@ contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
     struct ArbParams {
         address pair1;
         address pair2;
-        address factory1;        // factory الخاص بـ pair1 (لازم يكون موثّق مسبقاً)
-        address factory2;        // factory الخاص بـ pair2 (لازم يكون موثّق مسبقاً)
+        address factory1;        
+        address factory2;        
         address borrowToken;
         uint256 borrowAmount;
         uint256 amount0OutPair2;
@@ -109,8 +98,7 @@ contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
         // يتعرف على السداد أصلاً وبترجع revert لاحقاً بمعادلة K)
         if (params.repayToken != token0Pair1 && params.repayToken != token1Pair1) revert InvalidPair();
 
-        // ⚡ تحسين: استخدام Yul لـ balanceOf لتوفير الغاز
-        // ⚠️ ملاحظة: ما فيك توصل لحقل بنية (params.profitToken) مباشرة جوه assembly —
+        (params.profitToken) مباشرة جوه assembly —
         // لازم تسحبه لمتغير عادي أولاً (قيمة بسيطة بيقدر الـ Yul يشوفها بالاسم).
         address profitTokenForBalance = params.profitToken;
         uint256 balanceBefore;
@@ -155,9 +143,6 @@ contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
         // تأكيد إضافي إن الباراميترات المفكوكة تطابق العنوان المتصل فعلاً
         if (params.pair1 != msg.sender) revert Unauthorized();
 
-        // ⚡ تحسين: استخدام Yul لـ transfer مع فحص الإرجاع لتوفير الغاز
-        // ⚠️ نفس الملاحظة: حقول البنية (params.pair2 / params.borrowAmount /
-        // params.borrowToken) لازم تُسحب لمتغيرات عادية قبل استخدامها بالـ assembly.
         address pair2ForTransfer = params.pair2;
         uint256 borrowAmountForTransfer = params.borrowAmount;
         address borrowTokenForTransfer = params.borrowToken;
@@ -171,8 +156,6 @@ contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
             if iszero(success) {
                 revert(0, 0)
             }
-            // تحقّق من قيمة الإرجاع فقط إذا رجّع الكول بيانات فعلاً (بعض
-            // التوكنات متل USDT ما بترجع أي شي مع نجاح العملية)
             if returndatasize() {
                 if iszero(mload(ptr)) {
                     revert(0, 0)
@@ -200,11 +183,8 @@ contract AdvancedFlashArbitrage is Ownable, ReentrancyGuard, IUniswapV2Callee {
         emit ArbitrageExecuted(params.profitToken, profit);
     }
 
-    /**
-     * @dev يتحقق أن `pair` هو فعلاً الـ pair المسجل في `factory` الموثّق لنفس
-     *      التوكنين اللذين يعلن أنه يحتفظ بهما، ويرجّع التوكنين لإعادة استخدامهم.
-     *      يمنع تمرير عقد خبيث كـ pair1/pair2 أو factory وهمي.
-     */
+    
+     
     function _validatePair(address pair, address factory) internal view returns (address token0, address token1) {
         if (pair == address(0) || factory == address(0)) revert InvalidPair();
         if (!trustedFactories[factory]) revert InvalidPair();
