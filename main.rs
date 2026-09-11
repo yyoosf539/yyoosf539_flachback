@@ -19,7 +19,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use reqwest::Client;
 use tracing::{info, warn, error, debug};
 
-// ⚡ لوحة الصفقات: سيرفر HTTP مدمج + تسجيل/حفظ الصفقات
 use axum::{routing::get, Json, Router, extract::State, response::Html};
 use serde::{Serialize, Deserialize};
 use std::net::SocketAddr;
@@ -31,13 +30,10 @@ use revm::context::TxEnv;
 use revm::{Context, MainBuilder, MainContext, ExecuteEvm, ExecuteCommitEvm};
 
 sol! {
-    // للاستعلام عن رصيد التوكن قبل/بعد التنفيذ داخل REVM لحساب الربح الحقيقي
     interface IERC20 {
         function balanceOf(address account) external view returns (uint256);
     }
 
-    // Multicall3 — موجود على نفس العنوان تقريبًا بكل شبكات EVM بما فيها Polygon
-    // 0xcA11bde05977b3631167028862bE2a173976CA11
     interface IMulticall3 {
         struct Call3 {
             address target;
@@ -91,7 +87,6 @@ sol! {
 
     event Sync(uint112 reserve0, uint112 reserve1);
 
-    // أهم الدوال اللي بتنادى منها الـ mempool على Uniswap V2 / QuickSwap Router
     interface IUniswapV2Router {
         function swapExactTokensForTokens(
             uint256 amountIn,
@@ -143,26 +138,21 @@ struct SimulationResult {
 struct PoolState {
     reserve0: U256,
     reserve1: U256,
-    fee_bps: u32, // مثال: 30 = 0.30% (Uniswap V2 / QuickSwap القياسي)
+    fee_bps: u32, 
     token0: Address,
     token1: Address,
 }
 
-/// حالة كل السوق المعروف لدينا: عنوان المجمع -> حالته
 type MarketState = Arc<RwLock<HashMap<Address, PoolState>>>;
 
 type CodeCache = Arc<RwLock<HashMap<Address, Bytes>>>;
 
 type PairRegistry = HashMap<(Address, Address), Vec<(Address, String)>>;
 
-/// عنوان مجمّع -> معرّف الـ DEX تبعه (مشتقة من PairRegistry، لتحديد dex الضحية إذا نادت
-/// على عقد pair مباشرة بدل راوتر).
 type PairDexMap = HashMap<Address, String>;
 
-/// عنوان راوتر -> معرّف الـ DEX تبعه.
 type RouterDexMap = HashMap<Address, String>;
 
-/// معرّف الـ DEX -> عنوان الـ factory تبعه (لازم للتحقق _validatePair بالعقد المعدّل).
 type DexFactoryMap = HashMap<String, Address>;
 
 fn sorted_pair(a: Address, b: Address) -> (Address, Address) {
@@ -170,9 +160,6 @@ fn sorted_pair(a: Address, b: Address) -> (Address, Address) {
 }
 
 
-/// حالة الصفقة عبر دورة حياتها: بنبلّش بـ Submitted (أرسلنا الـ bundle بناءً على محاكاة
-/// ربحية)، وبعدين watch_trade_outcome بتحدّثها لـ Won (انضمّت فعليًا بالبلوك ونجحت) أو
-/// Lost (ما انضمّت خلال نافذة المراقبة، أو انضمّت لكن فشلت/revert).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 enum TradeStatus {
@@ -181,24 +168,18 @@ enum TradeStatus {
     Lost,
 }
 
-/// سبب الخسارة — يفرّق بين "سبقنا" و"revert" و"builder رفض" لتوجيه التحسينات.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum LossReason {
-    /// لم تُضمّن خلال نافذة المراقبة (frontrun / builder لم يختار bundle)
     NotIncluded,
-    /// انضمّت لكن revert (slippage، minProfit، state drift)
     Reverted,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TradeRecord {
-    /// هاش معاملتنا نحن (المراجحة)، هو المفتاح الفريد للصفقة
     tx_hash: String,
     victim_tx_hash: String,
-    /// طابع زمني بالثواني منذ epoch
     timestamp: u64,
-    /// الربح المتوقع من محاكاة REVM (قبل خصم الغاز)، بوحدة wei لتوكن الربح
     expected_profit_wei: String,
     /// تكلفة الغاز المتوقعة وقت الإرسال (base_fee فقط، تقريبية)
     expected_gas_cost_wei: String,
@@ -287,13 +268,7 @@ async fn record_submitted_trade(
     persist_trade_log(log).await;
 }
 
-/// ⚡ تراقب استقبال معاملتنا فعليًا خلال عدد محدود من البلوكات القادمة. هاد أهم فرق
-/// بين "بوت بيدّعي ربح نظري" و"بوت بيوثّق نتيجته الحقيقية": لو ما انضمّت المعاملة
-/// (بوت تاني سبقنا، أو الـ builder رفض الـ bundle)، منسجلها خسارة صراحة بدل تجاهلها.
-/// ⚠️ ملاحظة إصدارات (متل باقي الملف): أسماء حقول/دوال TransactionReceipt
-/// (status()، gas_used، effective_gas_price) بتختلف شوي بين إصدارات alloy
-/// (أحيانًا status حقل bool مباشر بدل دالة، أو effective_gas_price بنوع u128 لا U256).
-/// راجع توثيق alloy-rpc-types عندك وعدّل الأسطر الثلاثة بأول match لو لزم.
+
 async fn watch_trade_outcome<P: Provider>(
     provider: Arc<P>,
     log: TradeLog,
@@ -443,8 +418,6 @@ async fn api_trades(State(state): State<AppState>) -> Json<Vec<TradeRecord>> {
     Json(trades)
 }
 
-/// صفحة اللوحة: HTML/CSS/JS مضمّن بالكامل (بدون أي CDN خارجي) — بتشتغل حتى بدون إنترنت
-/// طالما البوت شغّال محليًا، وبتحدّث نفسها كل ثانيتين عبر fetch لنقاط /api/*.
 async fn dashboard_index() -> Html<&'static str> {
     Html(include_str!("dashboard.html"))
 }
@@ -909,8 +882,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                // فيه فجوة (local_nonce > chain_nonce): هاد طبيعي لبضع ثوانٍ (معاملات
-                // بالطريق لسا ما انضمّت). المشكلة فقط لو الفجوة نفسها عالقة بدون تقدم.
                 match last_seen_chain_nonce {
                     Some(prev) if prev == chain_nonce => {
                         stall_count += 1;
@@ -932,14 +903,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // حالة السوق (بدل CacheDB وحدها - نحتفظ بالـ reserves مباشرة لأنها أسرع وأبسط للحساب الرياضي)
     let market_state: MarketState = Arc::new(RwLock::new(HashMap::new()));
 
     bootstrap_reserves_multicall(&provider, &known_pairs, &pair_registry, &market_state).await;
 
-    // ⚡ تسخين bytecode العقود الثابتة مرة وحدة (راوترات + أزواج + عقدنا + كل التوكنات
-    // المسجّلة). هاد بيلغي أهم اختناق latency بمحاكاة REVM: قبلها كل معاملة معلّقة
-    // كانت تجبر AlloyDB يجيب نفس الـ bytecode من الشبكة من جديد.
     let code_cache: CodeCache = Arc::new(RwLock::new(HashMap::new()));
     {
         let mut addresses: HashSet<Address> = HashSet::new();
@@ -1005,15 +972,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // ⚡ تحسين سرعة حاسم: subscribe_full_pending_transactions بيرجّع جسم المعاملة كامل
-    // مباشرة من الاشتراك، فبنوفر RPC round-trip كامل (get_transaction_by_hash) لكل معاملة
-    // معلّقة بتمر بالشبكة — وهاد أكبر فرق بالـ latency بين بوت "بطيء" وبوت "منافس فعليًا".
     info!("🎧 iam sharing Mempool (full-tx subscription)...");
     let mut pending_tx_sub = provider.subscribe_full_pending_transactions().await?.into_stream();
 
-    // سقف للمهام المتزامنة: تحت ضغط عالي بالـ mempool، سبام tokio::spawn غير محدود
-    // بيغرق الـ scheduler ويبطّئ استجابة أهم فرصة. الـ Semaphore بيحافظ على latency منخفض
-    // للمعاملات ذات الأولوية بدل ما "يفوّت الشوت" بسبب queue طويلة.
     let sim_semaphore = Arc::new(Semaphore::new(sim_concurrency));
 
     loop {
@@ -1042,8 +1003,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bundle_window_task = bundle_block_window;
 
             tokio::spawn(async move {
-                // لا تنتظر لو الطابور ممتلئ — فرصة MEV لها عمر أجزاء ثانية،
-                // انتظار طويل أسوأ من تجاهل الفرصة.
                 let Ok(_permit) = semaphore.try_acquire() else {
                     return;
                 };
@@ -1053,7 +1012,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     None => return,
                 };
 
-                // فلترة مبكرة وسريعة جدًا: فقط الراوترات أو الأزواج اللي عم نراقبها
                 if !routers.contains(&to_address) && !pairs.contains(&to_address) {
                     return;
                 }
@@ -1088,8 +1046,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );                            return;
                         }
                     };
-                    // pair1 = مصدر الاقتراض (flash borrow، سعره غير متأثر بصفقة الضحية).
-                    // pair2 = الـ pool اللي الضحية تداولت عليه فعليًا (سعره تحرك، وفيه نبيع).
                     let (pair1, dex1, pair2, dex2) = (ref_pair, ref_dex, victim_pair, victim_dex);
                     let Some(&factory1) = dex_factories_task.get(&dex1) else {
                         warn!("no factory registered in DEX_FACTORIES for dex={dex1} (pair1={pair1})");
@@ -1251,9 +1207,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 };
 
-                // ⚠️ ملاحظة إصدارات: TxEnvelope::tx_hash() اسمها الدقيق ممكن يختلف
-                // بين إصدارات alloy (أحيانًا .hash() أو .tx_hash()). راجع نوع
-                // signed_envelope عندك (على الأغلب alloy::consensus::TxEnvelope).
                 let our_tx_hash = *signed_envelope.tx_hash();
                 let victim_tx_hash = target_tx.tx_hash();
 
@@ -1310,7 +1263,6 @@ struct VictimSwap {
 
 /// يحاول فك تشفير أشهر دوال سواب على راوتر Uniswap V2 / QuickSwap.
 /// أرجع None إذا الـ selector مش معروف عندنا (تجاهل المعاملة بسرعة).
-/// ⚡ تحسين سرعة: بدل محاولة abi_decode ثلاث مرات (كل محاولة فاشلة بتعمل تخصيص/تحقق
 /// كامل)، منقارن أول 4 بايت (function selector) مرة وحدة ومنروح مباشرة للدالة الصحيحة.
 /// معاملات mempool اللي مش من دوالنا المعروفة بترجع None فورًا بدون أي محاولة فك تشفير.
 fn decode_victim_swap(input: &Bytes, tx_value: U256) -> Option<VictimSwap> {
@@ -1477,7 +1429,6 @@ fn resolve_pair_pair(
     }
 
     // معرّف الـ DEX اللي فعليًا نفّذت عليه الضحية صفقتها
-    // ⚡ لو to_address (راوتر أو pair) مش موجود بـ pair_dex ولا router_dex، يعني
     // عنوانه اجتاز الفلترة المبكرة (routers/pairs sets) لكن ما انربط بـ DEX id —
     // فحص إعدادات router_dex_task/pair_dex_task تبعتك، غالبًا نسيت تسجّل هالراوتر/الزوج.
     let victim_dex_id = pair_dex
@@ -1491,7 +1442,6 @@ fn resolve_pair_pair(
         .map(|(addr, dex)| (*addr, dex.clone()))
         .ok_or("no registered pair matches victim's dex id for this token pair")?;
 
-    // ⚡ p1 لازم يكون عنده PoolState محمّل بـ MarketState — لو رجع None هون، يعني
     // إما bootstrap_reserves_multicall ما غطّى هالمجمّع، أو ما وصل أي حدث Sync له لسا.
     let p1 = state.get(&pair1).ok_or("pair1 reserves not loaded in market state yet")?;
     let price1 = implied_price_1e18(p1.reserve0, p1.reserve1).ok_or("pair1 price calc failed (zero reserve?)")?;
@@ -1758,15 +1708,7 @@ async fn warm_code_cache<P: Provider>(
     info!("🔥 to equip bytecode: {loaded}/{} addresses", addresses.len());
 }
 
-/// محاكاة حقيقية عبر REVM: بننفّذ معاملة الضحية أولاً على حالة آخر بلوك (عبر AlloyDB اللي
-/// بتجيب bytecode/storage/balances مباشرة من الـ RPC lazily وتخزّنها بـ CacheDB)، وبعدين
-/// ننفّذ معاملتنا فوق نفس الحالة المتغيّرة، ونقيس فرق رصيد profitToken الفعلي قبل/بعد —
-/// مش رقم وهمي. هاد هو الفرق بين بوت "بيخمّن" وبوت فعلي بيتحقق قبل ما يخاطر بغاز حقيقي.
-///
-/// ⚠️ ملاحظة إصدارات: واجهة revm (Evm builder / TxEnv / نتائج transact) بتتغيّر بين
-/// الإصدارات بشكل كبير. الكود هون مكتوب على بنية revm 14+ الحديثة (fork-db عبر AlloyDB).
-/// إذا عندك إصدار أقدم رح تحتاج تبدّل لـ revm::db::{CacheDB, EthersDB} أو ما شابه،
-/// والمنطق (نفّذ ثم نفّذ ثم قارن الرصيد) بيضل نفسه.
+
 async fn simulate_bundle_revm<P: Provider + Clone + 'static>(
     provider: &Arc<P>,
     target_tx: &Transaction,
@@ -1782,13 +1724,7 @@ async fn simulate_bundle_revm<P: Provider + Clone + 'static>(
         .ok_or("WrapDatabaseAsync: requires tokio runtime with multiple threads (multi-thread)")?;
     let mut cache_db = CacheDB::new(wrapped_db);
 
-    // ⚡ تسخين مسبق: نزرع bytecode العقود المعروفة بالـ CacheDB مباشرة من الذاكرة
-    // بدل ما نترك REVM يكتشف الحاجة لها أثناء التنفيذ ويطلبها عبر RPC (latency عالي
-    // ومتكرر لنفس العناوين بكل معاملة معلّقة). AlloyDB بيضل fallback طبيعي لأي عنوان
-    // غير مسخّن (مثلاً توكن جديد ما كان بالقوائم المعروفة).
-    // ⚠️ افتراض متعمّد: نزرع balance=0 و nonce=0 لهاي العقود لأن منطقنا (سواب V2 قياسي)
-    // ما بيعتمد على رصيد native أو nonce عقد الراوتر/الزوج/التوكن نفسه. لو عندك عقود
-    // بمنطق مختلف (مثلاً بتستخدم msg.value أو CREATE داخليًا) لازم تراجع هالافتراض.
+ 
     {
         let warm = code_cache.read().await;
         for (&addr, code) in warm.iter() {
@@ -1830,7 +1766,6 @@ async fn simulate_bundle_revm<P: Provider + Clone + 'static>(
 
         let victim_result = evm.transact_commit(victim_tx).map_err(|e| e.to_string())?; // commit: لازم نطبّق أثرها فعليًا على الحالة قبل معاملتنا
         if !victim_result.is_success() {
-            // معاملة الضحية نفسها فشلت (revert) — ما في شي نلحق نبني عليه
             debug!("❌ sim aborted: victim tx reverted (from={}, to={:?})", target_tx.from(), target_tx.to());
             return Ok(SimulationResult { is_profitable: false, expected_profit: U256::ZERO, gas_used: 0 });
         }
@@ -1861,9 +1796,6 @@ async fn simulate_bundle_revm<P: Provider + Clone + 'static>(
     drop(evm2);
 
     if !my_result.is_success() {
-        // ⚡ my_result.tx_gas_used() موجود حتى لو العملية revert-ت (الغاز المستهلك
-        // فعليًا قبل الفشل)، ونطبع output الـ revert كـ hex عشان نعرف سبب الفشل
-        // (عادة بيكون Error(string) أو custom error من العقد نفسه).
         let gas_spent = my_result.tx_gas_used();
         let revert_data = my_result.output().cloned().unwrap_or_default();
         debug!(
@@ -1915,10 +1847,6 @@ where
     Ok(U256::from_be_slice(&output[0..32]))
 }
 
-/// يبني calldata لـ executeFlashArbitrage مطابقة للعقد المنشور: 1) pair1.swap()
-/// يقرض borrowAmount (لهيك amount0/1OutPair1 هي فتحة القرض مش ناتج سواب)، 2)
-/// نبيع المبلغ عبر pair2 (amount0/1OutPair2 = الناتج الحقيقي المحسوب)، 3) نسدد
-/// repayAmount لـ pair1 ونحتفظ بالباقي كربح.
 fn build_calldata(
     pair1: Address,
     pair2: Address,
