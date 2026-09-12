@@ -1,2 +1,13 @@
-here# yyoosf539_flachback bot_MEV Arbitrage bot written in Rust Disclaimer: This bot was created for portfolio/resume purposes, not for actual use.
+# yyoosf539_flachback bot
+
+## بوت MEV Arbitrage مكتوب بلغة Rust
+
+بوت متخصص باستغلال فرص الأرباح اللحظية (MEV Arbitrage) على البلوكشين، تم تطويره بلغة Rust لضمان الأداء والسرعة.
+
+> **إخلاء مسؤولية:** هذا المشروع تم إنشاؤه لأغراض العرض ضمن ملفي الشخصي (Portfolio/CV) فقط، وليس مخصصاً للاستخدام الفعلي.
+
+---
+
+**ملاحظة:** في سيرتي الذاتية (CV) إشارة لمشروع باسم **temushop.shop** — هذا الموقع تم إلغاؤه حالياً، وانتقل المشروع إلى نطاق (domain) جديد:
+🔗 https://tmshop.online
 ![My Certificate](IMG20260911010526.jpg)
